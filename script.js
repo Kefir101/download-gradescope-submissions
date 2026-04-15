@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gradescope Asynchronous Bulk Downloader (Iframe Renderer)
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      1.1
 // @description  Headless traversal utilizing iframe rendering for SPA compatibility.
 // @author       System
 // @match        https://www.gradescope.com/
@@ -12,11 +12,13 @@
 (function() {
     'use strict';
 
-    // Time to wait for React to render inside the iframe after it loads
     const RENDER_DELAY_MS = 2500;
     const REQUEST_DELAY_MS = 1000;
 
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    // Regex to remove illegal Windows/Unix file path characters
+    const sanitizePath = (str) => str.replace(/[\\/:*?"<>|]/g, '-').trim();
 
     async function fetchAndParse(url) {
         try {
@@ -30,7 +32,6 @@
         }
     }
 
-    // Loads URL in a hidden iframe to execute SPA JavaScript, then extracts DOM
     async function extractDownloadFromIframe(url) {
         return new Promise((resolve) => {
             let iframe = document.getElementById('gs-scraper-frame');
@@ -42,7 +43,7 @@
             }
 
             iframe.onload = async () => {
-                await sleep(RENDER_DELAY_MS); // Wait for SPA DOM injection
+                await sleep(RENDER_DELAY_MS); 
 
                 try {
                     const doc = iframe.contentDocument || iframe.contentWindow.document;
@@ -65,7 +66,6 @@
                 }
             };
 
-            // Trigger load
             iframe.src = url;
         });
     }
@@ -81,7 +81,9 @@
 
         for (const courseNode of courseNodes) {
             const courseUrl = courseNode.href;
-            const courseName = courseNode.querySelector('.courseBox--shortname')?.innerText.replace(/[^a-z0-9]/gi, '_') || 'Unknown_Course';
+            const rawCourseName = courseNode.querySelector('.courseBox--shortname')?.innerText || 'Unknown_Course';
+            const courseName = sanitizePath(rawCourseName);
+            
             console.log(`Processing Course: ${courseName}`);
 
             const courseDoc = await fetchAndParse(courseUrl);
@@ -92,6 +94,9 @@
 
             for (const assignmentNode of assignmentNodes) {
                 const assignmentUrl = assignmentNode.href;
+                const rawAssignmentName = assignmentNode.innerText || 'Unknown_Assignment';
+                const assignmentName = sanitizePath(rawAssignmentName);
+
                 console.log(`Analyzing submission: ${assignmentUrl}`);
 
                 const targetDownloadUrl = await extractDownloadFromIframe(assignmentUrl);
@@ -99,11 +104,15 @@
                 if (targetDownloadUrl) {
                     console.log(`Queueing download: ${targetDownloadUrl}`);
 
-                    const filename = targetDownloadUrl.split('/').pop() || 'download';
+                    // Isolate the file extension from the raw URL to append to the sanitized name
+                    const urlPath = new URL(targetDownloadUrl).pathname;
+                    const extension = urlPath.includes('.') ? urlPath.split('.').pop() : 'zip';
+                    
+                    const filePath = `Gradescope/${courseName}/${assignmentName}.${extension}`;
 
                     GM_download({
                         url: targetDownloadUrl,
-                        name: `${courseName}_${filename}`,
+                        name: filePath,
                         saveAs: false
                     });
 
